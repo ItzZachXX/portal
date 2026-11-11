@@ -1,0 +1,288 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Map Calibrator</title>
+<style>
+  :root { --bg:#f4f5f7; --card:#fff; --ink:#15171c; --mute:#5d6572; --line:#d9dde3; --acc:#1d4ed8; --bad:#b42318; --ok:#067647; }
+  @media (prefers-color-scheme: dark) { :root { --bg:#0f1115; --card:#181b21; --ink:#e8eaee; --mute:#9aa3b2; --line:#2a2f38; --acc:#6ea0ff; --bad:#ff8a80; --ok:#5fd39a; } }
+  * { box-sizing: border-box; }
+  body { margin:0; background:var(--bg); color:var(--ink); font:15px/1.5 system-ui, sans-serif; }
+  header { padding:16px; border-bottom:1px solid var(--line); background:var(--card); }
+  h1 { margin:0; font-size:18px; }
+  header p { margin:4px 0 0; color:var(--mute); font-size:13px; }
+  main { display:grid; grid-template-columns: minmax(0,1fr) 380px; gap:16px; padding:16px; align-items:start; }
+  @media (max-width: 900px) { main { grid-template-columns: 1fr; } }
+  .card { background:var(--card); border:1px solid var(--line); border-radius:8px; padding:14px; margin-bottom:12px; }
+  .card h2 { margin:0 0 8px; font-size:15px; }
+  .mapwrap { position:relative; overflow:auto; max-height:80vh; border:1px solid var(--line); border-radius:8px; background:#000; }
+  .mapbox { position:relative; display:inline-block; line-height:0; cursor:crosshair; }
+  .mapbox img { display:block; max-width:none; user-select:none; -webkit-user-drag:none; }
+  .dot { position:absolute; width:14px; height:14px; margin:-7px 0 0 -7px; border-radius:50%; border:2px solid #fff; background:#e11d48; box-shadow:0 0 0 1px #000; pointer-events:none; }
+  .dot.test { background:#16a34a; }
+  .dot b { position:absolute; left:14px; top:-6px; font:700 12px/1 system-ui; color:#fff; text-shadow:0 0 3px #000, 0 0 3px #000; }
+  label { display:block; font-size:12px; color:var(--mute); margin:8px 0 2px; }
+  input[type=text], input[type=number], textarea, select { width:100%; padding:7px 8px; border:1px solid var(--line); border-radius:6px; background:var(--bg); color:var(--ink); font:inherit; }
+  textarea { min-height:70px; font:12px/1.4 ui-monospace, monospace; }
+  .row { display:flex; gap:8px; }
+  .row > * { flex:1; }
+  button { padding:7px 12px; border:1px solid var(--line); border-radius:6px; background:var(--card); color:var(--ink); font:inherit; cursor:pointer; }
+  button.primary { background:var(--acc); border-color:var(--acc); color:#fff; }
+  button:disabled { opacity:.5; cursor:default; }
+  .hint { color:var(--mute); font-size:12px; margin:6px 0 0; }
+  table { width:100%; border-collapse:collapse; font-size:12px; }
+  th, td { text-align:left; padding:4px 3px; border-bottom:1px solid var(--line); }
+  td button { padding:2px 7px; font-size:12px; }
+  pre { margin:0; padding:10px; background:var(--bg); border:1px solid var(--line); border-radius:6px; overflow:auto; font:12px/1.45 ui-monospace, monospace; white-space:pre; }
+  .good { color:var(--ok); } .badtxt { color:var(--bad); }
+  .step { color:var(--mute); font-size:13px; margin:0 0 8px; }
+</style>
+</head>
+<body>
+<header>
+  <h1>Map Calibrator</h1>
+  <p>Turns clicks on the map picture plus in-game coordinates into the mapping your radio or CAD system needs. Everything runs in your browser. Nothing is uploaded.</p>
+</header>
+<main>
+  <section>
+    <div class="mapwrap" id="wrap"><div class="mapbox" id="box"><img id="img" src="cad-map.png" alt="Map"></div></div>
+    <p class="hint" id="imgInfo">Loading the map picture...</p>
+  </section>
+
+  <aside>
+    <div class="card">
+      <h2>1. Add a point</h2>
+      <p class="step">Stand somewhere recognisable in the game, note your coordinates, then click that exact spot on the map. Use spots far apart, opposite corners is best. Three or more points lets this check its own accuracy.</p>
+      <div class="row">
+        <div><label for="gx">Game X</label><input id="gx" type="number" step="any" placeholder="LocationX"></div>
+        <div><label for="gz">Game Z</label><input id="gz" type="number" step="any" placeholder="LocationZ"></div>
+      </div>
+      <p class="hint" id="pending">Enter X and Z, then click the map.</p>
+      <label for="paste">Optional: paste the players list from the ER:LC server (the JSON with "Players") to pick coordinates from it</label>
+      <textarea id="paste" placeholder='{"Players":[{"Player":"Name:123","Location":{"LocationX":-120.5,"LocationZ":340.2}}]}'></textarea>
+      <select id="who" hidden></select>
+    </div>
+
+    <div class="card">
+      <h2>Points</h2>
+      <table id="tbl"><thead><tr><th>#</th><th>X</th><th>Z</th><th>u</th><th>v</th><th>Err px</th><th></th></tr></thead><tbody></tbody></table>
+      <div class="row" style="margin-top:8px"><button id="clear">Clear all</button><button id="undo">Undo last</button></div>
+    </div>
+
+    <div class="card">
+      <h2>2. Your mapping</h2>
+      <p class="step" id="status">Needs at least two points.</p>
+      <pre id="out">-</pre>
+      <div class="row" style="margin-top:8px">
+        <button class="primary" id="copyJson" disabled>Copy JSON</button>
+        <button id="copyJs" disabled>Copy JavaScript</button>
+        <button id="dl" disabled>Download</button>
+      </div>
+      <p class="hint">The JSON is the same format the CAD saves in data/map-calibration.json, so you can drop it straight in.</p>
+    </div>
+
+    <div class="card">
+      <h2>3. Test it</h2>
+      <p class="step">Click "Test mode", then click anywhere on the map to see the game coordinates it predicts. Or type coordinates to see where they land.</p>
+      <div class="row"><button id="testBtn">Test mode: off</button></div>
+      <div class="row">
+        <div><label for="tx">X</label><input id="tx" type="number" step="any"></div>
+        <div><label for="tz">Z</label><input id="tz" type="number" step="any"></div>
+      </div>
+      <p class="hint" id="testOut"></p>
+    </div>
+
+    <div class="card">
+      <h2>Different map picture?</h2>
+      <input type="file" id="file" accept="image/*">
+    </div>
+  </aside>
+</main>
+
+<script>
+(function () {
+  const $ = (id) => document.getElementById(id);
+  const img = $('img'), box = $('box');
+  let W = 900, H = 1144;
+  let points = [];      // { x, z, u, v }
+  let cal = null;       // { ax, bx, az, bz }
+  let testMode = false;
+  let testDot = null;
+
+  function loaded() {
+    W = img.naturalWidth || W; H = img.naturalHeight || H;
+    $('imgInfo').textContent = `Map picture: ${W} by ${H} pixels. u runs 0 to 1 left to right, v runs 0 to 1 top to bottom.`;
+  }
+  img.addEventListener('load', loaded);
+  if (img.complete) loaded();
+  img.addEventListener('error', () => { $('imgInfo').textContent = 'Could not load cad-map.png. Put this page next to cad-map.png, or choose a picture below.'; });
+  $('file').addEventListener('change', (e) => {
+    const f = e.target.files[0];
+    if (!f) return;
+    img.src = URL.createObjectURL(f);
+    points = []; cal = null; render();
+  });
+
+  // least squares for one axis: value = a * world + b
+  function fit(pairs) {
+    const n = pairs.length;
+    const mx = pairs.reduce((s, p) => s + p[0], 0) / n;
+    const my = pairs.reduce((s, p) => s + p[1], 0) / n;
+    const den = pairs.reduce((s, p) => s + (p[0] - mx) ** 2, 0);
+    if (den < 1e-6) return null;
+    const a = pairs.reduce((s, p) => s + (p[0] - mx) * (p[1] - my), 0) / den;
+    return [a, my - a * mx];
+  }
+  function compute() {
+    cal = null;
+    if (points.length < 2) return;
+    const fx = fit(points.map((p) => [p.x, p.u]));
+    const fz = fit(points.map((p) => [p.z, p.v]));
+    if (!fx || !fz) return;
+    cal = { ax: fx[0], bx: fx[1], az: fz[0], bz: fz[1] };
+  }
+  const toMap = (x, z) => ({ u: cal.ax * x + cal.bx, v: cal.az * z + cal.bz });
+  const toGame = (u, v) => ({ x: (u - cal.bx) / cal.ax, z: (v - cal.bz) / cal.az });
+  const f = (n, d) => Number(n).toFixed(d);
+
+  function render() {
+    compute();
+    box.querySelectorAll('.dot:not(.test)').forEach((d) => d.remove());
+    const tb = $('tbl').querySelector('tbody');
+    tb.replaceChildren();
+    points.forEach((p, i) => {
+      const dot = document.createElement('div');
+      dot.className = 'dot';
+      dot.style.left = `${p.u * W}px`; dot.style.top = `${p.v * H}px`;
+      const b = document.createElement('b'); b.textContent = String(i + 1); dot.append(b);
+      box.append(dot);
+
+      let err = '-';
+      if (cal && points.length >= 3) {
+        const q = toMap(p.x, p.z);
+        err = f(Math.hypot((q.u - p.u) * W, (q.v - p.v) * H), 1);
+      }
+      const tr = document.createElement('tr');
+      [i + 1, f(p.x, 1), f(p.z, 1), f(p.u, 4), f(p.v, 4), err].forEach((v) => { const td = document.createElement('td'); td.textContent = v; tr.append(td); });
+      const td = document.createElement('td');
+      const rm = document.createElement('button'); rm.textContent = 'x';
+      rm.addEventListener('click', () => { points.splice(i, 1); render(); });
+      td.append(rm); tr.append(td); tb.append(tr);
+    });
+
+    const ok = Boolean(cal);
+    ['copyJson', 'copyJs', 'dl'].forEach((id) => { $(id).disabled = !ok; });
+    if (!ok) {
+      $('out').textContent = '-';
+      $('status').textContent = points.length < 2 ? 'Needs at least two points.' : 'Those points are too close together on one axis. Add a point far from the others.';
+      $('status').className = 'step';
+      return;
+    }
+    const out = { ax: cal.ax, bx: cal.bx, az: cal.az, bz: cal.bz, imageWidth: W, imageHeight: H, savedAt: Date.now() };
+    $('out').textContent = JSON.stringify(out, null, 2);
+    const errs = points.length >= 3 ? points.map((p) => { const q = toMap(p.x, p.z); return Math.hypot((q.u - p.u) * W, (q.v - p.v) * H); }) : [];
+    const worst = errs.length ? Math.max(...errs) : null;
+    const s = $('status');
+    if (worst === null) { s.textContent = 'Mapping ready. Add a third point to check how accurate it is.'; s.className = 'step'; }
+    else if (worst <= 6) { s.textContent = `Accurate. Worst point is ${f(worst, 1)} pixels off.`; s.className = 'step good'; }
+    else { s.textContent = `Worst point is ${f(worst, 1)} pixels off. Check that point's coordinates or where you clicked.`; s.className = 'step badtxt'; }
+  }
+
+  function jsSnippet() {
+    return `// Game coordinates (LocationX, LocationZ) to the map picture (${W} by ${H})
+const CAL = { ax: ${cal.ax}, bx: ${cal.bx}, az: ${cal.az}, bz: ${cal.bz} };
+const IMG_W = ${W}, IMG_H = ${H};
+
+// fractions 0..1 (multiply by IMG_W / IMG_H for pixels)
+const toMap = (x, z) => ({ u: CAL.ax * x + CAL.bx, v: CAL.az * z + CAL.bz });
+const toPixels = (x, z) => { const m = toMap(x, z); return { px: m.u * IMG_W, py: m.v * IMG_H }; };
+// map click back to game coordinates
+const toGame = (u, v) => ({ x: (u - CAL.bx) / CAL.ax, z: (v - CAL.bz) / CAL.az });
+`;
+  }
+
+  const copy = async (text, btn) => {
+    try { await navigator.clipboard.writeText(text); const t = btn.textContent; btn.textContent = 'Copied'; setTimeout(() => (btn.textContent = t), 1200); }
+    catch { window.prompt('Copy this:', text); }
+  };
+  $('copyJson').addEventListener('click', (e) => copy($('out').textContent, e.target));
+  $('copyJs').addEventListener('click', (e) => copy(jsSnippet(), e.target));
+  $('dl').addEventListener('click', () => {
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(new Blob([$('out').textContent], { type: 'application/json' }));
+    a.download = 'map-calibration.json';
+    a.click();
+  });
+  $('clear').addEventListener('click', () => { points = []; render(); });
+  $('undo').addEventListener('click', () => { points.pop(); render(); });
+
+  // paste the players list to pick coordinates
+  $('paste').addEventListener('input', () => {
+    const sel = $('who');
+    sel.replaceChildren();
+    let list = [];
+    try {
+      const j = JSON.parse($('paste').value);
+      list = (Array.isArray(j) ? j : j.Players || []).filter((p) => p.Location && Number.isFinite(Number(p.Location.LocationX)));
+    } catch {}
+    if (!list.length) { sel.hidden = true; return; }
+    sel.append(new Option('Pick a player...', ''));
+    list.forEach((p) => sel.append(new Option(`${String(p.Player || 'Player').split(':')[0]} (${Math.round(p.Location.LocationX)}, ${Math.round(p.Location.LocationZ)})`, `${p.Location.LocationX},${p.Location.LocationZ}`)));
+    sel.hidden = false;
+  });
+  $('who').addEventListener('change', (e) => {
+    if (!e.target.value) return;
+    const [x, z] = e.target.value.split(',');
+    $('gx').value = x; $('gz').value = z;
+    $('pending').textContent = 'Now click that player\'s spot on the map.';
+  });
+
+  function placeTest(u, v) {
+    if (testDot) testDot.remove();
+    testDot = document.createElement('div');
+    testDot.className = 'dot test';
+    testDot.style.left = `${u * W}px`; testDot.style.top = `${v * H}px`;
+    box.append(testDot);
+  }
+  $('testBtn').addEventListener('click', () => {
+    testMode = !testMode;
+    $('testBtn').textContent = `Test mode: ${testMode ? 'on' : 'off'}`;
+    if (!testMode && testDot) { testDot.remove(); testDot = null; }
+  });
+  const typed = () => {
+    if (!cal) { $('testOut').textContent = 'Finish the mapping first.'; return; }
+    const x = Number($('tx').value), z = Number($('tz').value);
+    if ($('tx').value === '' || $('tz').value === '') return;
+    const m = toMap(x, z);
+    placeTest(m.u, m.v);
+    $('testOut').textContent = `Lands at u ${f(m.u, 4)}, v ${f(m.v, 4)} (pixel ${Math.round(m.u * W)}, ${Math.round(m.v * H)}).`;
+  };
+  $('tx').addEventListener('input', typed);
+  $('tz').addEventListener('input', typed);
+
+  box.addEventListener('click', (e) => {
+    const r = img.getBoundingClientRect();
+    const u = (e.clientX - r.left) / r.width;
+    const v = (e.clientY - r.top) / r.height;
+    if (u < 0 || u > 1 || v < 0 || v > 1) return;
+    if (testMode) {
+      if (!cal) { $('testOut').textContent = 'Finish the mapping first.'; return; }
+      const g = toGame(u, v);
+      placeTest(u, v);
+      $('testOut').textContent = `That spot is about X ${f(g.x, 1)}, Z ${f(g.z, 1)}.`;
+      return;
+    }
+    const x = parseFloat($('gx').value), z = parseFloat($('gz').value);
+    if (!Number.isFinite(x) || !Number.isFinite(z)) { $('pending').textContent = 'Type the game X and Z first, then click the map.'; return; }
+    points.push({ x, z, u, v });
+    $('gx').value = ''; $('gz').value = ''; $('who').value = '';
+    $('pending').textContent = `Point ${points.length} added. Enter the next X and Z, then click the map.`;
+    render();
+  });
+
+  render();
+})();
+</script>
+</body>
+</html>
